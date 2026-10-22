@@ -152,8 +152,10 @@ def hand_coded_optimizations(k:Scheduler) -> Scheduler:
           if k.upcast_size() >= 64: break
           try: ax = k.rngs.index(rng)
           except ValueError: continue
-          if k.rngs[ax].axis_type is AxisType.UPCAST or k.full_shape[ax] % 4 != 0: continue
-          try: k.apply_opt(Opt(OptOps.SPLIT, ax, (4, AxisType.UPCAST)))
+          if k.rngs[ax].axis_type is AxisType.UPCAST: continue
+          amt = 8 if k.full_shape[ax] % 8 == 0 and k.upcast_size() * 8 <= 64 else 4
+          if k.full_shape[ax] % amt: continue
+          try: k.apply_opt(Opt(OptOps.SPLIT, ax, (amt, AxisType.UPCAST)))
           except KernelOptError: break
   except KernelOptError: pass
 
