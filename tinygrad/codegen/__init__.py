@@ -190,13 +190,14 @@ def merge_reduce_ends(sink:UOp):
   return sink.substitute(subs) if subs else None
 
 def reduce_ranges_to_acc(ctx:itertools.count, r:UOp):
-  acc = UOp.alloc_like(r, next(ctx), AddrSpace.REG)
+  # keep the horizontal (upcast) axes in the accumulator and reduce them once after the loop, instead of folding
+  # them into every loop iteration. folding them serializes the lanes into one dependency chain per loop
+  acc = UOp.alloc_like(r.src[0] if r.arg[1] else r, next(ctx), AddrSpace.REG)
   input_ranges = tuple(x for x in r.src[0].ranges if x not in r.src[1:])
   acc_init = acc.after(*input_ranges).store(UOp.const(identity_element(r.arg[0], r.dtype)))
   acc_initted = acc.after(acc_init, *r.src[1:])
-  inp = r.src[0].reduce(arg=r.arg) if r.arg[1] else r.src[0]
-  acc_out = acc_initted.store(acc_initted.alu(r.arg[0], inp)).end(*r.src[1:])
-  return acc.after(acc_out)
+  acc_out = acc_initted.store(acc_initted.alu(r.arg[0], r.src[0])).end(*r.src[1:])
+  return acc.after(acc_out).reduce(arg=r.arg) if r.arg[1] else acc.after(acc_out)
 
 def expand_horizontal_reduce(r:UOp):
   inp = r.src[0]

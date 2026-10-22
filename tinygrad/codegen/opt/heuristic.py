@@ -146,7 +146,15 @@ def hand_coded_optimizations(k:Scheduler) -> Scheduler:
         if (axes:=k.upcastable_dims(reduce=True)) and s <= 3 and k.full_shape[axes[-1]] <= 3:
           k.apply_opt(Opt(OptOps.SPLIT, axes[-1], (0, AxisType.UPCAST)))
       elif k.full_shape[axes[-1]] % 4 == 0:
-        k.apply_opt(Opt(OptOps.SPLIT, axes[-1], (4, AxisType.UPCAST)))
+        # fused reduces (e.g. FFN gate and up in one kernel) have one reduce axis per dot: upcast all of them,
+        # not just the last one, otherwise the other dot stays a scalar loop
+        for rng in [k.rngs[a] for a in axes]:
+          if k.upcast_size() >= 64: break
+          try: ax = k.rngs.index(rng)
+          except ValueError: continue
+          if k.rngs[ax].axis_type is AxisType.UPCAST or k.full_shape[ax] % 4 != 0: continue
+          try: k.apply_opt(Opt(OptOps.SPLIT, ax, (4, AxisType.UPCAST)))
+          except KernelOptError: break
   except KernelOptError: pass
 
   # if nothing at all is upcasted and it's easy to, do an upcast
