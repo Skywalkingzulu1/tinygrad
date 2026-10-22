@@ -36,3 +36,9 @@ jobs:
           DEV: CPU
           MAX_BUFFER_SIZE: 0
         run: python -m pytest test/external/external_test_speed_llama_cpu.py -v -s
+      - name: per kernel profile (report only)
+        if: always()
+        env:
+          DEV: CPU:LLVM
+          MAX_BUFFER_SIZE: 0
+        run: python test/external/profile_llama_cpu_kernels.py
