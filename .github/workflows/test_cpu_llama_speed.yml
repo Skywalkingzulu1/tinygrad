@@ -41,4 +41,4 @@ jobs:
         env:
           DEV: CPU:LLVM
           MAX_BUFFER_SIZE: 0
-        run: python test/external/profile_llama_cpu_kernels.py
+        run: python -m test.external.profile_llama_cpu_kernels
