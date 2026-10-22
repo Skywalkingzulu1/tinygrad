@@ -108,10 +108,28 @@ def hand_coded_optimizations(k:Scheduler) -> Scheduler:
       to_upcast.append(axis)
   for axis in to_upcast[::-1]: k.apply_opt(Opt(OptOps.SPLIT, axis, (0, AxisType.UPCAST)))
 
+  # without local memory the upcast lanes are the only vectorization. spend the upcast budget on the reduce (k) axes
+  # first: lanes over k are contiguous, so the accumulator is a plain vector load/store per lane group and the vector
+  # body stays lane-contiguous (no transposed shuffle gathers), and one accumulator per lane gives independent FMA chains
+  if not k.ren.has_local and k.reduceop is not None and k.upcast_size() == 1 and (upc_axes:=k.upcastable_dims(reduce=True)):
+    # lanes of one reduce multiply into one accumulator: use 16 lanes for a single reduce axis and 4 each when the
+    # same reduce folds several axes (e.g. matmul), so the accumulator stays a handful of vectors either way
+    own_rngs = {u for u in k.reduceop.src[1:] if u.op is Ops.RANGE}
+    lane_amt = 16 if len([a for a in upc_axes if k.rngs[a] in own_rngs]) <= 1 else 4
+    for rng in [k.rngs[a] for a in upc_axes]:
+      if k.upcast_size() >= 32: break
+      try: axis = k.rngs.index(rng)
+      except ValueError: continue
+      if k.axis_types[axis] is AxisType.UPCAST or rng.src[0].divides(lane_amt) is None: continue
+      try: k.apply_opt(Opt(OptOps.SPLIT, axis, (lane_amt, AxisType.UPCAST)))
+      except KernelOptError: break
+
   # potentially do more upcasts of non reduce axes based on a heuristic
   is_dsp = k.ren.target.device == "DSP"
   upcasted_axis: set[int] = set()
-  while resolve(prod(k.full_shape[i] for i in k.upcastable_dims()) >= 1024) and (k.upcast_size() < 32):
+  # with reduce lanes already upcast the extra non reduce upcast only adds transposed lanes, keep the upcast size small
+  max_upcast = 8 if not k.ren.has_local and k.axes_of(AxisType.UPCAST, reduce=True) else 32
+  while resolve(prod(k.full_shape[i] for i in k.upcastable_dims()) >= 1024) and (k.upcast_size() < max_upcast):
     xb_choices = []
     # consider all upcastable axes with 3 or 4 upcast (128 on the DSP)
     for axis, upcast_amount in itertools.product(k.upcastable_dims(), ([128] if not len(upcasted_axis) else []) if is_dsp else [3,4]):
